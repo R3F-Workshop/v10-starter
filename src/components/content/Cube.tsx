@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
 // The TSL hooks live on the /webgpu entry; it shares its store with the main
 // entry, so this works inside the regular <Canvas>
-import { useUniforms } from '@react-three/fiber/webgpu'
+import { useLocalNodes, useUniforms, type CreatorState } from '@react-three/fiber/webgpu'
 import { useCursor } from '@react-three/drei'
 import { useControls } from 'leva'
 import { Color, MathUtils } from 'three'
@@ -39,24 +39,46 @@ export function Cube({ position, size = 1 }: CubeProps) {
   // UniformNodes, the rest get the same instances back. When a Leva color
   // changes, the value is written onto the existing node — the shader graph
   // is untouched, nothing recompiles.
-  const { uBaseColor, uHoverColor } = useUniforms(
-    { uBaseColor: baseColor, uHoverColor: hoverColor },
-    'cubes',
-  ) as unknown as { uBaseColor: ColorUniform; uHoverColor: ColorUniform }
+  useUniforms({ uBaseColor: baseColor, uHoverColor: hoverColor }, 'cubes')
 
-  // Per-cube uniforms + the material's node graph, built once
-  const { uHover, uAccent, uAccentAmount, colorNode, emissiveNode } = useMemo(() => {
-    const uHover = uniform(0)
-    const uAccentAmount = uniform(0)
-    const uAccent = uniform(new Color(ACCENTS[0]))
-    const tint = mix(uBaseColor, uAccent, uAccentAmount)
-    const colorNode = mix(tint, uHoverColor, uHover)
-    const emissiveNode = mix(color('#000000'), uHoverColor, uHover.mul(0.4))
-    return { uHover, uAccent, uAccentAmount, colorNode, emissiveNode }
-  }, [uBaseColor, uHoverColor])
+  // Per-cube uniforms. These hold mutable state (the hover damp, the accent
+  // index) so they are created once and never rebuilt — keeping them out of
+  // the useLocalNodes creator below is deliberate.
+  const { uHover, uAccent, uAccentAmount } = useMemo(
+    () => ({
+      uHover: uniform(0),
+      uAccentAmount: uniform(0),
+      uAccent: uniform(new Color(ACCENTS[0])),
+    }),
+    [],
+  )
+
+  // The creator's identity is a dep of useLocalNodes, so it has to be stable:
+  // an inline arrow would rebuild the graph every render, and the material is
+  // keyed by colorNode.uuid — it would remount on every hover.
+  const buildGraph = useCallback(
+    ({ uniforms }: CreatorState) => {
+      // Same alpha rough edge as before, just read from the scope instead
+      const cubes = uniforms.scope('cubes') as unknown as {
+        uBaseColor: ColorUniform
+        uHoverColor: ColorUniform
+      }
+      const tint = mix(cubes.uBaseColor, uAccent, uAccentAmount)
+      return {
+        colorNode: mix(tint, cubes.uHoverColor, uHover),
+        emissiveNode: mix(color('#000000'), cubes.uHoverColor, uHover.mul(0.4)),
+      }
+    },
+    [uHover, uAccent, uAccentAmount],
+  )
+
+  // useLocalNodes is useMemo + the store as deps: the graph rebuilds when the
+  // shared uniforms/nodes/textures change, and on HMR — so editing the TSL
+  // above recompiles the material instead of going stale until a remount.
+  const { colorNode, emissiveNode } = useLocalNodes(buildGraph)
 
   // Animate the hover mix per-frame — mutating a uniform never re-renders React
-  useFrame((_, delta) => {
+  useFrame(({ delta}) => {
     uHover.value = MathUtils.damp(uHover.value, hovered ? 1 : 0, 8, delta)
   })
 
