@@ -11,7 +11,7 @@ type PyramidProps = {
  * useFrame demo: runs every frame (~60×/second). Mutate the mesh directly in
  * here — never setState per frame.
  */
-export function Pyramid({ position = [0, 2.6, 0] }: PyramidProps) {
+export function Pyramid({ position = [6, 2.6, 2] }: PyramidProps) {
   const meshRef = useRef<Mesh>(null)
   const spinSpeed = useRef(0)
   const [hovered, setHovered] = useState(false)
